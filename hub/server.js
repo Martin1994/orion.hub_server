@@ -266,9 +266,11 @@ wsServer.on('request', function(request) {
       firstDomain: null,
       totalMessageChars: 0,
       totalMessages: 0,
-      connections: 0
+      connections: 0,
+      creator: connection.ID
     };
   }
+
   allConnections[id].push(connection);
   connectionStats[id].connections++;
   connectionStats[id].lastLeft = null;
@@ -319,6 +321,26 @@ wsServer.on('request', function(request) {
       logger.info("Connection ID", id, "was cleaned up entirely before last connection closed");
       return;
     }
+
+    //if the creator of the session has left, close everyone else's connection
+    if (connectionStats[id].creator == connection.ID) {
+      var message = createCloseYourselfMessage();
+      var parsed;
+      try {
+        parsed = JSON.parse(message.utf8Data);
+      } catch (e) {
+        logger.warn('Error parsing JSON: ' + JSON.stringify(message.utf8Data) + ": " + e);
+        return;
+      }
+
+      allConnections[id].map(function(connec, i) {
+        var c = allConnections[id][i];
+        if (c != connection || parsed["server-echo"]) {
+          c.sendUTF(message.utf8Data);
+        }
+      });
+    }
+
     var index = allConnections[id].indexOf(connection);
     if (index != -1) {
       allConnections[id].splice(index, 1);
@@ -329,6 +351,13 @@ wsServer.on('request', function(request) {
     }
     logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);
   });
+
+  var createCloseYourselfMessage = function() {
+    return { 
+      type: 'utf8',
+      utf8Data: '{"type":"close_yourself"}' 
+    }
+  }
 });
 
 setInterval(function () {
