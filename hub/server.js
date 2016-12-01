@@ -10,14 +10,14 @@ if ( process.env.NEW_RELIC_HOME ) {
 var SAMPLE_STATS_INTERVAL = 60*1000; // 1 minute
 var SAMPLE_LOAD_INTERVAL = 5*60*1000; // 5 minutes
 var EMPTY_ROOM_LOG_TIMEOUT = 3*60*1000; // 3 minutes
-var WEBSOCKET_COMPAT = true;
+var WEBSOCKET_COMPAT = false;
 
-var WebSocketServer = WEBSOCKET_COMPAT ?
-  require("./websocket-compat").server :
-  require("websocket").server;
+var WebSocketServer = require("websocket").server;
 var http = require('http');
 var parseUrl = require('url').parse;
 var fs = require('fs');
+var Session = require('./session.js');
+var Request = require('request');
 
 // FIXME: not sure what logger to use
 //var logger = require('../../lib/logger');
@@ -104,7 +104,6 @@ var server = http.createServer(function(request, response) {
   var protocol = request.headers["forwarded-proto"] || "http:";
   var host = request.headers.host;
   var base = protocol + "//" + host;
-
   if (url.pathname == '/status') {
     response.end("OK");
   } else if (url.pathname == '/load') {
@@ -223,7 +222,7 @@ var wsServer = new WebSocketServer({
     // Using autoaccept because the origin is somewhat dynamic
     // FIXME: make this smarter?
     autoAcceptConnections: false
-});
+  });
 
 function originIsAllowed(origin) {
   // Unfortunately the origin will be whatever page you are sharing,
@@ -231,8 +230,7 @@ function originIsAllowed(origin) {
   return true;
 }
 
-var allConnections = {};
-var connectionStats = {};
+var sessions = {};
 
 var ID = 0;
 
@@ -243,8 +241,9 @@ wsServer.on('request', function(request) {
     logger.info('Connection from origin ' + request.origin + ' rejected.');
     return;
   }
-
+  
   var id = request.httpRequest.url.replace(/^\/+hub\/+/, '').replace(/\//g, "");
+
   if (! id) {
     request.reject(404, 'No ID Found');
     return;
@@ -255,30 +254,15 @@ wsServer.on('request', function(request) {
   // this channel for (we don't bother to specify this)
   var connection = request.accept(null, request.origin);
   connection.ID = ID++;
-  if (! allConnections[id]) {
-    allConnections[id] = [];
-    connectionStats[id] = {
-      created: Date.now(),
-      sample: [],
-      clients: {},
-      domains: {},
-      urls: {},
-      firstDomain: null,
-      totalMessageChars: 0,
-      totalMessages: 0,
-      connections: 0,
-      creator: connection.ID
-    };
+
+  if (! sessions[id]) {
+    sessions[id] = new Session(id);
   }
 
-  allConnections[id].push(connection);
-  connectionStats[id].connections++;
-  connectionStats[id].lastLeft = null;
+  sessions[id].connectionJoined(connection);
+
   logger.debug('Connection accepted to ' + JSON.stringify(id) + ' ID:' + connection.ID);
-  connection.sendUTF(JSON.stringify({
-    type: "init-connection",
-    peerCount: allConnections[id].length-1
-  }));
+
   connection.on('message', function(message) {
     var parsed;
     try {
@@ -287,92 +271,50 @@ wsServer.on('request', function(request) {
       logger.warn('Error parsing JSON: ' + JSON.stringify(message.utf8Data) + ": " + e);
       return;
     }
-    connectionStats[id].clients[parsed.clientId] = true;
-    var domain = null;
-    if (parsed.url) {
-      domain = parseUrl(parsed.url).hostname;
-      connectionStats[id].urls[parsed.url] = true;
+
+    if (parsed.clientId){ 
+      sessions[id].confirmClient(connection.ID, parsed.clientId);
     }
-    if ((! connectionStats[id].firstDomain) && domain) {
-      connectionStats[id].firstDomain = domain;
-    }
-    connectionStats[id].domains[domain] = true;
-    connectionStats[id].totalMessageChars += message.utf8Data.length;
-    connectionStats[id].totalMessages++;
+
     logger.debug('Message on ' + id + ' bytes: ' +
                  (message.utf8Data && message.utf8Data.length) +
                  ' conn ID: ' + connection.ID + ' data:' + message.utf8Data.substr(0, 20) +
-                 ' connections: ' + allConnections[id].length);
-    for (var i=0; i<allConnections[id].length; i++) {
-      var c = allConnections[id][i];
-      if (c == connection && !parsed["server-echo"]) {
-        continue;
-      }
-      if (message.type === 'utf8') {
-        c.sendUTF(message.utf8Data);
-      } else if (message.type === 'binary') {
-        c.sendBytes(message.binaryData);
-      }
-    }
+                 ' connections: ' + sessions[id].allConnections.length);
+    
+    sessions[id].onmessage(connection, message);
   });
   connection.on('close', function(reasonCode, description) {
-    if (! allConnections[id]) {
+    if (! sessions[id]) {
       // Got cleaned up entirely, somehow?
-      logger.info("Connection ID", id, "was cleaned up entirely before last connection closed");
+      logger.info("Session ID", id, "was cleaned up entirely before last connection closed");
       return;
     }
 
-    //if the creator of the session has left, close everyone else's connection
-    if (connectionStats[id].creator == connection.ID) {
-      var message = createCloseYourselfMessage();
-      var parsed;
-      try {
-        parsed = JSON.parse(message.utf8Data);
-      } catch (e) {
-        logger.warn('Error parsing JSON: ' + JSON.stringify(message.utf8Data) + ": " + e);
-        return;
-      }
+    sessions[id].connectionLeft(connection);
 
-      allConnections[id].map(function(connec, i) {
-        var c = allConnections[id][i];
-        if (c != connection || parsed["server-echo"]) {
-          c.sendUTF(message.utf8Data);
-        }
-      });
+    if (! sessions[id].allConnections.length) {
+      delete sessions[id];
+      // connectionStats[id].lastLeft = Date.now();
     }
 
-    var index = allConnections[id].indexOf(connection);
-    if (index != -1) {
-      allConnections[id].splice(index, 1);
-    }
-    if (! allConnections[id].length) {
-      delete allConnections[id];
-      connectionStats[id].lastLeft = Date.now();
-    }
     logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);
   });
-
-  var createCloseYourselfMessage = function() {
-    return { 
-      type: 'utf8',
-      utf8Data: '{"type":"close_yourself"}' 
-    }
-  }
 });
 
 setInterval(function () {
-  for (var id in connectionStats) {
-    if (connectionStats[id].lastLeft && Date.now() - connectionStats[id].lastLeft > EMPTY_ROOM_LOG_TIMEOUT) {
-      logStats(id, connectionStats[id]);
-      delete connectionStats[id];
+  for (var id in sessions) {
+    var sessionStats = sessions[id].connectionStats
+    if (sessionStats.lastLeft && Date.now() - sessionStats.lastLeft > EMPTY_ROOM_LOG_TIMEOUT) {
+      logStats(id, sessionStats);
+      delete sessions[id].connectionStats;
       continue;
     }
-    var totalClients = countClients(connectionStats[id].clients);
+    var totalClients = countClients(sessionStats.clients);
     var connections = 0;
-    if (allConnections[id]) {
-      connections = allConnections[id].length;
+    if (sessions[id].allConnections) {
+      connections = sessions[id].allConnections.length;
     }
-    connectionStats[id].sample.push({
+    sessions[id].connectionStats.sample.push({
       time: Date.now(),
       totalClients: totalClients,
       connections: connections
@@ -387,15 +329,15 @@ setInterval(function () {
 }, SAMPLE_LOAD_INTERVAL);
 
 function getLoad() {
-  var sessions = 0;
+  var opensessions = 0;
   var connections = 0;
   var empty = 0;
   var solo = 0;
-  for (var id in allConnections) {
-    if (allConnections[id].length) {
-      sessions++;
-      connections += allConnections[id].length;
-      if (allConnections[id].length == 1) {
+  for (var id in sessions) {
+    if (sessions[id].allConnections.length) {
+      opensessions++;
+      connections += sessions[id].allConnections.length;
+      if (sessions[id].allConnections.length == 1) {
         solo++;
       }
     } else {
@@ -403,7 +345,7 @@ function getLoad() {
     }
   }
   return {
-    sessions: sessions,
+    sessions: opensessions,
     connections: connections,
     empty: empty,
     solo: solo
@@ -443,7 +385,7 @@ if (require.main == module) {
   var port = ops.argv.port || process.env.HUB_SERVER_PORT || process.env.VCAP_APP_PORT ||
       process.env.PORT || 8080;
   var host = ops.argv.host || process.env.HUB_SERVER_HOST || process.env.VCAP_APP_HOST ||
-      process.env.HOST || '127.0.0.1';
+      process.env.HOST || '0.0.0.0';
   var logLevel = process.env.LOG_LEVEL || 0;
   var logFile = process.env.LOG_FILE || ops.argv.log;
   var stdout = ops.argv.stdout || !logFile;
