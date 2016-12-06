@@ -5,7 +5,9 @@ var parseUrl = require('url').parse;
 var Promise = require('bluebird');
 var Request = require('request');
 
-var orionEndpoint = "http://localhost:8081/sharedWorkspace/tree/load/";
+var orionLoadEndpoint = "http://localhost:8081/sharedWorkspace/tree/load/";
+var orionSaveEndpoint = "http://localhost:8081/sharedWorkspace/tree/save/";
+
 /**
 * This class defines an active document.
 * It includes document specific data about clients, deals with the OT and connects to the filesystem.
@@ -117,10 +119,6 @@ class Document {
 	        message.utf8Data = JSON.stringify(msg);
 	        connection.sendUTF(JSON.stringify({'type': 'ack', 'doc': this.id}));
 	        this.notifyOthers(connection, message);
-	        // this.saveDocument()
-	        // .then(function(success, error) {
-	        // 	console.log("done saving");
-	        // });
 	    } else if (msg.type == 'selection') {
 	    	this.clients[msg.clientId].selection = msg.selection;
 	    	this.notifyOthers(connection, message);
@@ -160,7 +158,7 @@ class Document {
     getDocument() {
     	var self = this;
     	return new Promise(function(resolve, reject) {
-			Request(orionEndpoint + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
+			Request(orionLoadEndpoint + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
 				if (!error) {
 					resolve(body);
 				} else {
@@ -175,9 +173,9 @@ class Document {
     	return new Promise(function(resolve, reject) {
     		var headerData = {
 				"Orion-Version": "1",
-				"Content-Type": "text/plain;charset=UTF-8"
+				"Content-Type": "text/plain; charset=UTF-8"
 			};
-			Request({method: 'PUT', uri: self.projectLocation + self.id, options: {headers: headerData, data: self.ot.document}}, function(error, response, body) {
+			Request({method: 'PUT', uri: orionSaveEndpoint + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
 				if (body && !error) {
 					resolve(body);
 				} else {
@@ -188,6 +186,16 @@ class Document {
     }
 
     newOperation(operation, revision) {
+        if (revision % 5 == 0) {
+	        this.saveDocument()
+	        .then(function(success, error) {
+				if (error) {
+					console.log(error);
+				} else {
+					console.log("done saving");
+				}
+	        });
+        }
 	    var operation = ot.TextOperation.fromJSON(operation);
 	    operation = this.ot.receiveOperation(revision, operation);
 	    return operation;
