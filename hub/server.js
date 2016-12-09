@@ -18,6 +18,7 @@ var parseUrl = require('url').parse;
 var fs = require('fs');
 var Session = require('./session.js');
 var Request = require('request');
+var jwt = require('jsonwebtoken');
 
 // FIXME: not sure what logger to use
 //var logger = require('../../lib/logger');
@@ -30,6 +31,9 @@ var Request = require('request');
 // 4: don't show warn, do show error
 // 5: don't show anything
 // Stats are at level 2
+
+//jwt_secret needs to be the same as the one in the orion server
+var jwt_secret = "pomato (potato and tomato mix lol)";
 
 var thisSource = "// What follows is the source for the server.\n" +
     "// Obviously we can't prove this is the actual source, but if it isn't then we're \n" +
@@ -116,23 +120,6 @@ var server = http.createServer(function(request, response) {
   } else if (url.pathname == '/server-source') {
     response.writeHead(200, {"Content-Type": "text/plain"});
     response.end(thisSource);
-  } else if (url.pathname == '/findroom') {
-    if (request.method == "OPTIONS") {
-      // CORS preflight
-      corsAccept(request, response);
-      return;
-    }
-    var prefix = url.query.prefix;
-    var max = parseInt(url.query.max, 10);
-    if (! (prefix && max)) {
-      write400("You must include a valid prefix=CHARS&max=NUM portion of the URL", response);
-      return;
-    }
-    if (prefix.search(/[^a-zA-Z0-9]/) != -1) {
-      write400("Invalid prefix", response);
-      return;
-    }
-    findRoom(prefix, max, response);
   } else {
     write404(response);
   }
@@ -163,33 +150,9 @@ function write400(error, response) {
   response.end("Bad request: " + error);
 }
 
-function findRoom(prefix, max, response) {
-  response.writeHead(200, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*"
-  });
-  var smallestNumber;
-  var smallestRooms = [];
-  for (var candidate in allConnections) {
-    if (candidate.indexOf(prefix + "__") === 0) {
-      var count = allConnections[candidate].length;
-      if (count < max && (smallestNumber === undefined || count <= smallestNumber)) {
-        if (smallestNumber === undefined || count < smallestNumber) {
-          smallestNumber = count;
-          smallestRooms = [candidate];
-        } else {
-          smallestRooms.push(candidate);
-        }
-      }
-    }
-  }
-  var room;
-  if (! smallestRooms.length) {
-    room = prefix + "__" + generateId();
-  } else {
-    room = pickRandom(smallestRooms);
-  }
-  response.end(JSON.stringify({name: room}));
+function write401(error, response) {
+  response.writeHead(404, {"Content-Type": "text/plain"});
+  response.end("Unauthorized request");
 }
 
 function generateId(length) {
@@ -254,6 +217,7 @@ wsServer.on('request', function(request) {
   // this channel for (we don't bother to specify this)
   var connection = request.accept(null, request.origin);
   connection.ID = ID++;
+  connection.authenticated = false;
 
   if (! sessions[id]) {
     sessions[id] = new Session(id);
@@ -272,8 +236,24 @@ wsServer.on('request', function(request) {
       return;
     }
 
-    if (parsed.clientId){ 
-      sessions[id].confirmClient(connection.ID, parsed.clientId);
+    if (parsed.type == 'authenticate') {
+      //decode & verify token, then approve connection if successful
+      try {
+        var decoded = jwt.verify(parsed.token, jwt_secret);
+        console.log("decoded username is: " + decoded.username);
+        connection.sendUTF(JSON.stringify({'type': 'authenticated'}));
+        connection.authenticated = true;
+        //add info about the user like username, user-color (for client-side annotation and identification)
+        sessions[id].createClient(connection.ID, parsed.clientId, decoded.username);
+        return;
+      } catch (err) {
+        //failed to authenticate
+      }
+    }
+
+    if (!connection.authenticated) {
+      // throw error;
+      return;
     }
 
     logger.debug('Message on ' + id + ' bytes: ' +
@@ -290,11 +270,11 @@ wsServer.on('request', function(request) {
       return;
     }
 
-    sessions[id].connectionLeft(connection);
-
-    if (! sessions[id].allConnections.length) {
-      delete sessions[id];
-      // connectionStats[id].lastLeft = Date.now();
+    if (sessions[id].connectionLeft(connection)) {
+      if (! sessions[id].allConnections.length) {
+        delete sessions[id];
+        // connectionStats[id].lastLeft = Date.now();
+      }
     }
 
     logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);

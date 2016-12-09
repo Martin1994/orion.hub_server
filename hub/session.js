@@ -69,6 +69,7 @@ class Session {
 	    // };
 
 	    // this.notifyAll(c, message);
+	    return true;
     }
 
     onmessage(c, message) {
@@ -78,28 +79,28 @@ class Session {
 		
 		if (!this.clients[msg.clientId]) {
 			//populate the client data or update it if it already exists
-			this.clients[msg.clientId] = {'clientId': msg.clientId};
+			this.clients[msg.clientId] = this.createClient(c.id, msg.clientId, 'unknown');
     	}
 
     	//if its a doc specific message, only send it to the clients involved. Otherwise send to all.
     	if (msg.doc) {
 		    var doc = msg.doc;
-	    	this.clients[msg.clientId].currentDoc = msg.doc;
+	    	this.clients[msg.clientId].currentDoc = doc;
 		    //if we don't have the document, let's start it up.
 	    	if (!this.docs[doc]) {
 	    		var self = this;
 				this.docs[doc] = new Document(doc, this.sessionId);
 				this.docs[doc].startOT()
 				.then(function() {
-					self.docs[doc].onmessage(c, message);
+					self.docs[doc].onmessage(c, message, self.clients[msg.clientId]);
 				});
 			} else {
-				this.docs[doc].onmessage(c, message);
+				this.docs[doc].onmessage(c, message, this.clients[msg.clientId]);
 			}
     	} else {
     		if (msg.type == 'leave-document') {
     			if (this.docs[this.clients[msg.clientId].currentDoc]) {
-	    			this.docs[this.clients[msg.clientId].currentDoc].onmessage(c, message);
+	    			this.docs[this.clients[msg.clientId].currentDoc].onmessage(c, message, this.clients[msg.clientId]);
     			}    				
     		} else {
 	    		if (this.clients[msg.clientId].currentDoc) {
@@ -125,12 +126,17 @@ class Session {
 	    }
     }
 
-    confirmClient(connectionID, clientId) {
+    createClient(connectionID, clientId, username) {
     	if (!this.clients[clientId]) {
-    		this.clients[clientId] = {};
-    		this.clients[clientId].clientId = clientId;
-    		this.clients[clientId].connectionID = connectionID;
-	    	this.clients[clientId].active = true;
+    		var usercolor = this.generateUserColor();
+
+    		this.clients[clientId] = {
+				'clientId': clientId,
+				'username': username,
+				'usercolor': usercolor,
+				'connectionID': connectionID,
+				'active': true
+    		};
     	}
     }
 
@@ -148,6 +154,14 @@ class Session {
 		this.connectionStats.domains[domain] = true;
 		this.connectionStats.totalMessageChars += message.utf8Data.length;
 		this.connectionStats.totalMessages++;
+    }
+
+    generateUserColor() {
+		var COLORS = [
+			"#8A2BE2", "#DC143C", "#E67E00", "#FF00FF", "#00CC00", "#999966", "#669999",
+			"#FF6347", "#006AFF", "#000000"
+		];
+		return COLORS[Math.floor(Math.random() * COLORS.length)];
     }
 }
 

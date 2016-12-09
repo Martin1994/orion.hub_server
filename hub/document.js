@@ -31,14 +31,21 @@ class Document {
     			console.log('Failed to get initial content.');
     		}
 	    	self.ot = new ot.Server(text);
+			console.log("******************");
+			console.log(self.id);
+			console.log("OT HAS STARTED!!");
     	});
     }
 
     destroy() {
     }
 
-    joinDocument(connection, clientId) {
-    	this.sendInit(connection);
+    joinDocument(connection, clientId, client) {
+		if (!this.clients[clientId]) {
+			this.clients[clientId] = client;
+			this.clients[clientId].selection = 0;
+		}
+
     	this.connections.push(connection);
 
 		var message = {
@@ -51,17 +58,9 @@ class Document {
 			})
 		};
 
-		// var message = {
-		// 	'type': 'utf8',
-		// 	'utf8Data': JSON.stringify({
-		// 		'type': 'selection',
-		// 		'clientId': clientId,
-		// 		'selection': this.clients[clientId].selection,
-		// 		'doc': this.id
-		// 	})
-		// };
-
 		this.notifyOthers(connection, message);
+
+		this.sendInit(connection);
     }
 
     leaveDocument(connection, clientId) {
@@ -95,33 +94,40 @@ class Document {
 			})
 		};
 
-		if (this.clients.length == 0) {
+		if (Object.keys(this.clients).length == 0) {
 			this.destroy();
 		}
 		this.notifyOthers(null, message);
     }
 
-    onmessage(connection, message) {
+    onmessage(connection, message, client) {
 		var msg = JSON.parse(message.utf8Data);
-		if (!this.clients[msg.clientId]) {
-			//create or update the necessary client info
-			//create a updateClient function
-			this.clients[msg.clientId] = {'clientId': msg.clientId, 'connectionID': connection.ID, 'selection': 0};
-    	}
 
 	    if (msg.type == 'join-document') {
-			this.joinDocument(connection, msg.clientId);
+			this.joinDocument(connection, msg.clientId, client);
 	    } else if (msg.type == 'leave-document') {
 	    	this.leaveDocument(connection, msg.clientId);
 	    } else if (msg.type == 'operation') {
-	    	var operation = this.newOperation(msg.operation, msg.revision);
-	        msg.operation = operation;
-	        message.utf8Data = JSON.stringify(msg);
-	        connection.sendUTF(JSON.stringify({'type': 'ack', 'doc': this.id}));
-	        this.notifyOthers(connection, message);
+			try {
+				var operation = this.newOperation(msg.operation, msg.revision);
+		        msg.operation = operation;
+		        message.utf8Data = JSON.stringify(msg);
+		        connection.sendUTF(JSON.stringify({'type': 'ack', 'doc': this.id}));
+		        this.notifyOthers(connection, message);
+			} catch (e) {
+				console.warn(e);
+				var self = this;
+				this.connections.forEach(function(c) {
+					self.sendInit(c);
+				});
+			}
 	    } else if (msg.type == 'selection') {
-	    	this.clients[msg.clientId].selection = msg.selection;
+			if (this.clients[msg.clientId]) {
+				this.clients[msg.clientId].selection = msg.selection;
+			}
 	    	this.notifyOthers(connection, message);
+	    } else if (msg.type == 'get-clients') {
+	    	this.sendAllClients(connection);
 	    }
     }
 
@@ -146,13 +152,35 @@ class Document {
     }
 
 	sendInit(c) {
-		c.sendUTF(JSON.stringify({
-			type: "init-document",
-			operation: new ot.TextOperation().insert(this.ot.document),
-			revision: this.ot.operations.length,
-			'doc': this.id,
-			clients: this.clients
-		}));
+		try {
+			var message = JSON.stringify({
+				type: "init-document",
+				operation: new ot.TextOperation().insert(this.ot.document),
+				revision: this.ot.operations.length,
+				'doc': this.id,
+				clients: this.clients
+			}); 
+			c.sendUTF(message);
+		} catch (e) {
+			console.warn(e);
+			if (!this.ot) {
+				var self = this;
+				console.log("******************");
+				console.log(this.id);
+				console.log("the object has been destroyed");
+				this.startOT()
+				.then(function() {
+					var message = JSON.stringify({
+						type: "init-document",
+						operation: new ot.TextOperation().insert(this.ot.document),
+						revision: this.ot.operations.length,
+						'doc': this.id,
+						clients: this.clients
+					});
+					self.notifyOthers(c, message, true)
+				});
+			}
+		}
 	}
 
     getDocument() {
@@ -183,6 +211,15 @@ class Document {
 				}
 			});
 		});
+    }
+
+    sendAllClients(connection) {
+		var message = JSON.stringify({
+			type: "all_clients",
+			'doc': this.id,
+			clients: this.clients
+		});
+		connection.sendUTF(message);
     }
 
     newOperation(operation, revision) {
