@@ -20,10 +20,16 @@ class Document {
     	this.ot = null;
     	this.connections = [];
     	this.id = id;
-    	this.sessionId = sessionId; 
+		this.sessionId = sessionId;
+		this.awaitingDoc = false;
+		this.waitingConnections = [];
     }
 
     startOT() {
+		if (this.awaitingDoc) {
+			return new Promise.resolve();
+		}
+		this.awaitingDoc = true;
     	var self = this;
     	return this.getDocument()
     	.then(function(text, error) {
@@ -34,6 +40,11 @@ class Document {
 			console.log("******************");
 			console.log(self.id);
 			console.log("OT HAS STARTED!!");
+			self.awaitingDoc = false;
+			self.waitingConnections.forEach(function(c) {
+				self.sendInit(c);
+			});
+			self.waitingConnections = [];
     	});
     }
 
@@ -41,7 +52,7 @@ class Document {
     }
 
     joinDocument(connection, clientId, client) {
-		if (!this.clients[clientId]) {
+		if (!this.clients[clientId] && client) {
 			this.clients[clientId] = client;
 			this.clients[clientId].selection = 0;
 		}
@@ -152,6 +163,12 @@ class Document {
     }
 
 	sendInit(c) {
+		//if doc being grabbed by other user, add this user to waiting list for receiving it.
+		if (this.awaitingDoc) {
+			this.waitingConnections.push(c);
+			console.log("connection waiting for doc.");
+			return;
+		}
 		try {
 			var message = JSON.stringify({
 				type: "init-document",
@@ -162,22 +179,15 @@ class Document {
 			}); 
 			c.sendUTF(message);
 		} catch (e) {
-			console.warn(e);
+			console.warn(e.stack);
 			if (!this.ot) {
 				var self = this;
 				console.log("******************");
 				console.log(this.id);
-				console.log("the object has been destroyed");
+				console.log("two users probably entered a doc at the same moment.");
 				this.startOT()
 				.then(function() {
-					var message = JSON.stringify({
-						type: "init-document",
-						operation: new ot.TextOperation().insert(this.ot.document),
-						revision: this.ot.operations.length,
-						'doc': this.id,
-						clients: this.clients
-					});
-					self.notifyOthers(c, message, true)
+					self.sendInit(c);
 				});
 			}
 		}
