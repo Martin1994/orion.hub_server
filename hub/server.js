@@ -270,12 +270,10 @@ wsServer.on('request', function(request) {
       return;
     }
 
-    if (sessions[id].connectionLeft(connection)) {
-      if (! sessions[id].allConnections.length) {
-        delete sessions[id];
+    sessions[id].connectionLeft(connection, function(lastPerson) {
+        lastPerson ? delete sessions[id] : null;
         // connectionStats[id].lastLeft = Date.now();
-      }
-    }
+    });
 
     logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);
   });

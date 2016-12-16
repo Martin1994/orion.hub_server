@@ -74,7 +74,7 @@ class Document {
 		this.sendInit(connection);
     }
 
-    leaveDocument(connection, clientId) {
+    leaveDocument(connection, clientId, callback) {
 	    var index = this.connections.indexOf(connection);
 
 	    if (index == -1) {
@@ -106,9 +106,11 @@ class Document {
 		};
 
 		if (Object.keys(this.clients).length == 0) {
-			this.destroy();
+			callback(true);
+		} else {
+			this.notifyOthers(null, message);
+			callback(false);
 		}
-		this.notifyOthers(null, message);
     }
 
     onmessage(connection, message, client) {
@@ -116,8 +118,6 @@ class Document {
 
 	    if (msg.type == 'join-document') {
 			this.joinDocument(connection, msg.clientId, client);
-	    } else if (msg.type == 'leave-document') {
-	    	this.leaveDocument(connection, msg.clientId);
 	    } else if (msg.type == 'operation') {
 			try {
 				var operation = this.newOperation(msg.operation, msg.revision);

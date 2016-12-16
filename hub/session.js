@@ -38,7 +38,7 @@ class Session {
 		}));
     }
 
-    connectionLeft(c) {
+    connectionLeft(c, callback) {
 	    var index = this.allConnections.indexOf(c);
 	    if (index != -1) {
 	      this.allConnections.splice(index, 1);
@@ -54,11 +54,21 @@ class Session {
 
 		if (typeof toDelete !== 'undefined') {
 			//remove the user from the document
-			if (this.clients[toDelete].currentDoc) {
-				this.docs[this.clients[toDelete].currentDoc].leaveDocument(c, this.clients[toDelete].clientId);
-			}
-
+			var tempClient = this.clients[toDelete];
 			delete this.clients[toDelete];
+
+			if (tempClient.currentDoc && this.docs[tempClient.currentDoc]) {
+				var self = this;
+				this.docs[tempClient.currentDoc].leaveDocument(c, tempClient.clientId, function(lastPerson) {
+					if (lastPerson) {
+						delete self.docs[tempClient.currentDoc];
+					}
+
+					!self.allConnections.length ? callback(true) : callback(false);
+				});
+			} else {
+				!this.allConnections.length ? callback(true) : callback(false);
+			}
 		}
 
 	    // var message = {
@@ -69,7 +79,6 @@ class Session {
 	    // };
 
 	    // this.notifyAll(c, message);
-	    return true;
     }
 
     onmessage(c, message) {
@@ -100,10 +109,15 @@ class Session {
     	} else {
     		if (msg.type == 'leave-document') {
     			if (this.docs[this.clients[msg.clientId].currentDoc]) {
-	    			this.docs[this.clients[msg.clientId].currentDoc].onmessage(c, message, this.clients[msg.clientId]);
-    			}    				
+					var self = this;
+					this.docs[this.clients[msg.clientId].currentDoc].leaveDocument(c, msg.clientId, function(lastPerson) {
+						if (lastPerson) {
+							delete self.docs[self.clients[msg.clientId].currentDoc];
+						}
+					});
+				}
     		} else {
-	    		if (this.clients[msg.clientId].currentDoc) {
+				if (this.clients[msg.clientId].currentDoc && this.docs[this.clients[msg.clientId].currentDoc]) {
 	    			//update doc specific client data
 	    			this.docs[this.clients[msg.clientId].currentDoc].updateClient(msg);
 	    		}
