@@ -106,7 +106,10 @@ class Document {
 		};
 
 		if (Object.keys(this.clients).length == 0) {
-			callback(true);
+			this.saveDocument()
+			.then(function() {
+				callback(true);
+			});
 		} else {
 			this.notifyOthers(null, message);
 			callback(false);
