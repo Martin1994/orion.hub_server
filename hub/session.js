@@ -22,8 +22,7 @@ class Session {
 			firstDomain: null,
 			totalMessageChars: 0,
 			totalMessages: 0,
-			connections: 0,
-			lastLeft: null
+			connections: 0
 		};
 		this.docs = {};
 		this.sessionId = sessionId;
@@ -59,10 +58,9 @@ class Session {
 
 			if (tempClient.currentDoc && this.docs[tempClient.currentDoc]) {
 				var self = this;
+				//check with the document if this is the last user. If so, clear the doc from memory.
 				this.docs[tempClient.currentDoc].leaveDocument(c, tempClient.clientId, function(lastPerson) {
-					if (lastPerson) {
-						delete self.docs[tempClient.currentDoc];
-					}
+					lastPerson ? delete self.docs[tempClient.currentDoc] : null;
 
 					!self.allConnections.length ? callback(true) : callback(false);
 				});
@@ -70,15 +68,6 @@ class Session {
 				!this.allConnections.length ? callback(true) : callback(false);
 			}
 		}
-
-	    // var message = {
-	    // 	'type': 'utf8',
-	    // 	'utf8Data': JSON.stringify({
-	    // 		'type': 'client_left'
-	    // 	})
-	    // };
-
-	    // this.notifyAll(c, message);
     }
 
     onmessage(c, message) {

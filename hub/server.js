@@ -1,24 +1,19 @@
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 // New Relic Server monitoring support
 if ( process.env.NEW_RELIC_HOME ) {
   require("newrelic");
 }
 
-var SAMPLE_STATS_INTERVAL = 60*1000; // 1 minute
-var SAMPLE_LOAD_INTERVAL = 5*60*1000; // 5 minutes
-var EMPTY_ROOM_LOG_TIMEOUT = 3*60*1000; // 3 minutes
-var WEBSOCKET_COMPAT = false;
+var STATS_INTERVAL = 5*60*1000; //5 minutes
 
 var WebSocketServer = require("websocket").server;
 var http = require('http');
 var parseUrl = require('url').parse;
 var fs = require('fs');
 var Session = require('./session.js');
-var Request = require('request');
 var jwt = require('jsonwebtoken');
+
+//jwt_secret needs to be the same as the one in the server connected to the filesystem (orion)
+var jwt_secret = "pomato (potato and tomato mix lol)";
 
 // FIXME: not sure what logger to use
 //var logger = require('../../lib/logger');
@@ -31,14 +26,6 @@ var jwt = require('jsonwebtoken');
 // 4: don't show warn, do show error
 // 5: don't show anything
 // Stats are at level 2
-
-//jwt_secret needs to be the same as the one in the orion server
-var jwt_secret = "pomato (potato and tomato mix lol)";
-
-var thisSource = "// What follows is the source for the server.\n" +
-    "// Obviously we can't prove this is the actual source, but if it isn't then we're \n" +
-    "// a bunch of lying liars, so at least you have us on record.\n\n" +
-    fs.readFileSync(__filename);
 
 var Logger = function (level, filename, stdout) {
   this.level = level;
@@ -108,8 +95,10 @@ var server = http.createServer(function(request, response) {
   var protocol = request.headers["forwarded-proto"] || "http:";
   var host = request.headers.host;
   var base = protocol + "//" + host;
-  if (url.pathname == '/status') {
-    response.end("OK");
+  if (url.pathname == '/'){
+    response.end("OK")
+  } else if (url.pathname == '/status') {
+    response.end("Running");
   } else if (url.pathname == '/load') {
     var load = getLoad();
     response.writeHead(200, {"Content-Type": "text/plain"});
@@ -117,9 +106,6 @@ var server = http.createServer(function(request, response) {
                  load.sessions + " sessions; " +
                  load.solo + " are single-user and " +
                  (load.sessions - load.solo) + " active sessions");
-  } else if (url.pathname == '/server-source') {
-    response.writeHead(200, {"Content-Type": "text/plain"});
-    response.end(thisSource);
   } else {
     write404(response);
   }
@@ -155,20 +141,6 @@ function write401(error, response) {
   response.end("Unauthorized request");
 }
 
-function generateId(length) {
-  length = length || 10;
-  var letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV0123456789';
-  var s = '';
-  for (var i=0; i<length; i++) {
-    s += letters.charAt(Math.floor(Math.random() * letters.length));
-  }
-  return s;
-}
-
-function pickRandom(seq) {
-  return seq[Math.floor(Math.random() * seq.length)];
-}
-
 function startServer(port, host) {
   server.listen(port, host, function() {
     logger.info('HUB Server listening on port ' + port + " interface: " + host + " PID: " + process.pid);
@@ -198,185 +170,110 @@ var sessions = {};
 var ID = 0;
 
 wsServer.on('request', function(request) {
-  if (!originIsAllowed(request.origin)) {
-    // Make sure we only accept requests from an allowed origin
-    request.reject();
-    logger.info('Connection from origin ' + request.origin + ' rejected.');
-    return;
-  }
-  
-  var id = request.httpRequest.url.replace(/^\/+hub\/+/, '').replace(/\//g, "");
-
-  if (! id) {
-    request.reject(404, 'No ID Found');
-    return;
-  }
-
-  // FIXME: we should use a protocol here instead of null, but I can't
-  // get it to work.  "Protocol" is what the two clients are using
-  // this channel for (we don't bother to specify this)
-  var connection = request.accept(null, request.origin);
-  connection.ID = ID++;
-  connection.authenticated = false;
-
-  if (! sessions[id]) {
-    sessions[id] = new Session(id);
-  }
-
-  sessions[id].connectionJoined(connection);
-
-  logger.debug('Connection accepted to ' + JSON.stringify(id) + ' ID:' + connection.ID);
-
-  connection.on('message', function(message) {
-    var parsed;
-    try {
-      parsed = JSON.parse(message.utf8Data);
-    } catch (e) {
-      logger.warn('Error parsing JSON: ' + JSON.stringify(message.utf8Data) + ": " + e);
-      return;
-    }
-
-    if (parsed.type == 'authenticate') {
-      //decode & verify token, then approve connection if successful
-      try {
-        var decoded = jwt.verify(parsed.token, jwt_secret);
-        console.log("decoded username is: " + decoded.username);
-        connection.sendUTF(JSON.stringify({'type': 'authenticated'}));
-        connection.authenticated = true;
-        //add info about the user like username, user-color (for client-side annotation and identification)
-        sessions[id].createClient(connection.ID, parsed.clientId, decoded.username);
+    if (!originIsAllowed(request.origin)) {
+        // Make sure we only accept requests from an allowed origin
+        request.reject();
+        logger.info('Connection from origin ' + request.origin + ' rejected.');
         return;
-      } catch (err) {
-        //failed to authenticate
-      }
+    }
+  
+    var id = request.httpRequest.url.replace(/^\/+hub\/+/, '').replace(/\//g, "");
+
+    if (! id) {
+        request.reject(404, 'No ID Found');
+        return;
     }
 
-    if (!connection.authenticated) {
-      // throw error;
-      return;
-    }
+    // FIXME: we should use a protocol here instead of null, but I can't
+    // get it to work.  "Protocol" is what the two clients are using
+    // this channel for (we don't bother to specify this)
+    var connection = request.accept(null, request.origin);
 
-    logger.debug('Message on ' + id + ' bytes: ' +
-                 (message.utf8Data && message.utf8Data.length) +
-                 ' conn ID: ' + connection.ID + ' data:' + message.utf8Data.substr(0, 20) +
-                 ' connections: ' + sessions[id].allConnections.length);
-    
-    sessions[id].onmessage(connection, message);
-  });
-  connection.on('close', function(reasonCode, description) {
+    //give the connection an ID
+    connection.ID = ID++;
+    //Add the 'autheticated' flag to the connection
+    connection.authenticated = false;
+
+    //initialize the session if its the first user connecting to it
     if (! sessions[id]) {
-      // Got cleaned up entirely, somehow?
-      logger.info("Session ID", id, "was cleaned up entirely before last connection closed");
-      return;
+        sessions[id] = new Session(id);
     }
 
-    sessions[id].connectionLeft(connection, function(lastPerson) {
-        lastPerson ? delete sessions[id] : null;
-        // connectionStats[id].lastLeft = Date.now();
+    sessions[id].connectionJoined(connection);
+
+    logger.debug('Connection accepted to ' + JSON.stringify(id) + ' ID:' + connection.ID);
+
+    connection.on('message', function(message) {
+        var parsed;
+        try {
+            parsed = JSON.parse(message.utf8Data);
+        } catch (e) {
+            logger.warn('Error parsing JSON: ' + JSON.stringify(message.utf8Data) + ": " + e);
+            return;
+        }
+
+        if (parsed.type == 'authenticate') {
+            //decode & verify token, then approve connection if successful
+            try {
+                var decoded = jwt.verify(parsed.token, jwt_secret);
+                console.log("decoded username is: " + decoded.username);
+                connection.sendUTF(JSON.stringify({'type': 'authenticated'}));
+                connection.authenticated = true;
+                //add info about the user like username, user-color (for client-side annotation and identification)
+                sessions[id].createClient(connection.ID, parsed.clientId, decoded.username);
+                return;
+            } catch (err) {
+                //failed to authenticate
+            }
+        }
+
+        //we don't want to process messages from this connection if it is not authenticated
+        if (!connection.authenticated) {
+            // throw error;
+            return;
+        }
+    
+        sessions[id].onmessage(connection, message);
     });
 
-    logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);
-  });
+    connection.on('close', function(reasonCode, description) {
+        if (! sessions[id]) {
+            // Got cleaned up entirely, somehow?
+            logger.info("Session ID", id, "was cleaned up entirely before last connection closed");
+            return;
+        }
+
+        //check with the session if its the last person who left
+        sessions[id].connectionLeft(connection, function(lastPerson) {
+            lastPerson ? delete sessions[id] : null;
+        });
+
+        logger.debug('Peer ' + connection.remoteAddress + ' disconnected, ID: ' + connection.ID);
+    });
 });
 
-setInterval(function () {
-  for (var id in sessions) {
-    var sessionStats = sessions[id].connectionStats
-    if (sessionStats.lastLeft && Date.now() - sessionStats.lastLeft > EMPTY_ROOM_LOG_TIMEOUT) {
-      logStats(id, sessionStats);
-      delete sessions[id].connectionStats;
-      continue;
+setInterval(function() {
+    var stats = {
+        totalSessions: 0,
+        totalClients: 0
+    };
+
+    for (id in sessions) {
+        stats.totalSessions += 1;
+        stats.totalClients += sessions[id].allConnections.length;
     }
-    var totalClients = countClients(sessionStats.clients);
-    var connections = 0;
-    if (sessions[id].allConnections) {
-      connections = sessions[id].allConnections.length;
-    }
-    sessions[id].connectionStats.sample.push({
-      time: Date.now(),
-      totalClients: totalClients,
-      connections: connections
-    });
-  }
-}, SAMPLE_STATS_INTERVAL);
 
-setInterval(function () {
-  var load = getLoad();
-  load.time = Date.now();
-  logger.info("LOAD", JSON.stringify(load));
-}, SAMPLE_LOAD_INTERVAL);
-
-function getLoad() {
-  var opensessions = 0;
-  var connections = 0;
-  var empty = 0;
-  var solo = 0;
-  for (var id in sessions) {
-    if (sessions[id].allConnections.length) {
-      opensessions++;
-      connections += sessions[id].allConnections.length;
-      if (sessions[id].allConnections.length == 1) {
-        solo++;
-      }
-    } else {
-      empty++;
-    }
-  }
-  return {
-    sessions: opensessions,
-    connections: connections,
-    empty: empty,
-    solo: solo
-  };
-}
-
-function countClients(clients) {
-  var n = 0;
-  for (var clientId in clients) {
-    n++;
-  }
-  return n;
-}
-
-function logStats(id, stats) {
-  logger.info("STATS", JSON.stringify({
-    id: id,
-    created: stats.created,
-    sample: stats.sample,
-    totalClients: countClients(stats.clients),
-    totalMessageChars: stats.totalMessageChars,
-    totalMessages: stats.totalMessages,
-    domain: stats.firstDomain || null,
-    domainCount: countClients(stats.domains),
-    urls: countClients(stats.urls)
-  }));
-}
+    logger.info('SERVER STATS: ' + JSON.stringify(stats));
+}, STATS_INTERVAL);
 
 if (require.main == module) {
-  var ops = require('optimist')
-      .usage("Usage: $0 [--port 8080] [--host=localhost] [--log=filename] [--log-level=N]")
-      .describe("port", "The port to server on (default $HUB_SERVER_PORT, $PORT, $VCAP_APP_PORT, or 8080")
-      .describe("host", "The interface to serve on (default $HUB_SERVER_HOST, $HOST, $VCAP_APP_HOST, 127.0.0.1).  Use 0.0.0.0 to make it public")
-      .describe("log-level", "The level of logging to do, from 0 (very verbose) to 5 (nothing) (default $LOG_LEVEL or 0)")
-      .describe("log", "A file to log to (default $LOG_FILE or stdout)")
-      .describe("stdout", "Log to both stdout and the log file");
-  var port = ops.argv.port || process.env.HUB_SERVER_PORT || process.env.VCAP_APP_PORT ||
-      process.env.PORT || 8080;
-  var host = ops.argv.host || process.env.HUB_SERVER_HOST || process.env.VCAP_APP_HOST ||
-      process.env.HOST || '0.0.0.0';
-  var logLevel = process.env.LOG_LEVEL || 0;
-  var logFile = process.env.LOG_FILE || ops.argv.log;
-  var stdout = ops.argv.stdout || !logFile;
-  if (ops.argv['log-level']) {
-    logLevel = parseInt(ops.argv['log-level'], 10);
-  }
-  logger = new Logger(logLevel, logFile, stdout);
-  if (ops.argv.h || ops.argv.help) {
-    console.log(ops.help());
-    process.exit();
-  } else {
+    var port = process.env.PORT || 8080;
+    var host = process.env.HOST || '127.0.0.1' /*|| '0.0.0.0'*/; //'0.0.0.0' is used to make this public and accessible by ipaddress.
+    var logLevel = process.env.LOG_LEVEL || 0;
+    var logFile = process.env.LOG_FILE;
+    var stdout = !logFile;
+    logger = new Logger(logLevel, logFile, stdout);
     startServer(port, host);
-  }
 }
 
 exports.startServer = startServer;

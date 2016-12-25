@@ -5,8 +5,8 @@ var parseUrl = require('url').parse;
 var Promise = require('bluebird');
 var Request = require('request');
 
-var orionLoadEndpoint = "http://localhost:8081/sharedWorkspace/tree/load/";
-var orionSaveEndpoint = "http://localhost:8081/sharedWorkspace/tree/save/";
+var fileLoadUrl = "http://localhost:8081/sharedWorkspace/tree/load/";
+var fileSaveUrl = "http://localhost:8081/sharedWorkspace/tree/save/";
 
 /**
 * This class defines an active document.
@@ -14,6 +14,10 @@ var orionSaveEndpoint = "http://localhost:8081/sharedWorkspace/tree/save/";
 */
 class Document {
 
+	/**
+	 * @param id - the doc id.
+	 * @param sessionId - the id of the session
+	**/
     constructor(id, sessionId) {
     	//every client is identified by clientID; must have as property a connection ID, and in-doc line location
     	this.clients = {};
@@ -199,7 +203,7 @@ class Document {
     getDocument() {
     	var self = this;
     	return new Promise(function(resolve, reject) {
-			Request(orionLoadEndpoint + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
+			Request(fileLoadUrl + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
 				if (!error) {
 					resolve(body);
 				} else {
@@ -216,7 +220,7 @@ class Document {
 				"Orion-Version": "1",
 				"Content-Type": "text/plain; charset=UTF-8"
 			};
-			Request({method: 'PUT', uri: orionSaveEndpoint + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
+			Request({method: 'PUT', uri: fileSaveUrl + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
 				if (body && !error) {
 					resolve(body);
 				} else {
