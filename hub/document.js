@@ -4,9 +4,10 @@ var ot = require('ot');
 var parseUrl = require('url').parse;
 var Promise = require('bluebird');
 var Request = require('request');
+var config = require('./config.js');
 
-var fileLoadUrl = "http://localhost:8081/sharedWorkspace/tree/load/";
-var fileSaveUrl = "http://localhost:8081/sharedWorkspace/tree/save/";
+var fileLoadUrl = config.orion + config.fileLoadUrl;
+var fileSaveUrl = config.orion + config.fileSaveUrl;
 
 /**
 * This class defines an active document.

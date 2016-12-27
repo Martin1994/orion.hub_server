@@ -11,9 +11,9 @@ var parseUrl = require('url').parse;
 var fs = require('fs');
 var Session = require('./session.js');
 var jwt = require('jsonwebtoken');
+var config = require('./config.js');
 
-//jwt_secret needs to be the same as the one in the server connected to the filesystem (orion)
-var jwt_secret = "pomato (potato and tomato mix lol)";
+var jwt_secret = config.jwt_secret;
 
 // FIXME: not sure what logger to use
 //var logger = require('../../lib/logger');
