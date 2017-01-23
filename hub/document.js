@@ -59,7 +59,7 @@ class Document {
     joinDocument(connection, clientId, client) {
 		if (!this.clients[clientId] && client) {
 			this.clients[clientId] = client;
-			this.clients[clientId].selection = 0;
+			this.clients[clientId].selection = new ot.Selection.createCursor(0);
 		}
 
     	this.connections.push(connection);

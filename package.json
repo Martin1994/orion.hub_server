@@ -14,6 +14,7 @@
     "jsonwebtoken": "^7.2.0",
     "newrelic": "^1.36.0",
     "ot": "0.0.15",
+    "request": "^2.79.0",
     "websocket": "^1.0.23"
   },
   "devDependencies": {},

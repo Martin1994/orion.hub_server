@@ -110,6 +110,7 @@ class Session {
 	    			//update doc specific client data
 	    			this.docs[this.clients[msg.clientId].currentDoc].updateClient(msg);
 	    		}
+					console.log("out: " + message.utf8Data);
 	    	 	this.notifyAll(c, message);
     		}
     	}
@@ -136,7 +137,7 @@ class Session {
     		this.clients[clientId] = {
 				'clientId': clientId,
 				'username': username,
-				'usercolor': usercolor,
+				'color': usercolor,
 				'connectionID': connectionID,
 				'active': true
     		};
