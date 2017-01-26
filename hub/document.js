@@ -23,7 +23,7 @@ class Document {
     	//every client is identified by clientID; must have as property a connection ID, and in-doc line location
     	this.clients = {};
     	this.ot = null;
-    	this.connections = [];
+		this.connections = new Set();
     	this.id = id;
 		this.sessionId = sessionId;
 		this.awaitingDoc = false;
@@ -62,7 +62,7 @@ class Document {
 			this.clients[clientId].selection = new ot.Selection.createCursor(0);
 		}
 
-    	this.connections.push(connection);
+    	this.connections.add(connection);
 
 		var message = {
 			'type': 'utf8',
@@ -80,13 +80,13 @@ class Document {
     }
 
     leaveDocument(connection, clientId, callback) {
-	    var index = this.connections.indexOf(connection);
+	    var has = this.connections.has(connection);
 
-	    if (index == -1) {
+	    if (!has) {
 	    	return;
 	    }
 
-	    this.connections.splice(index, 1);
+	    this.connections.delete(connection);
     	//delete the client
     	if (clientId) {
     		delete this.clients[clientId];
@@ -173,7 +173,7 @@ class Document {
 	sendInit(c) {
 		//if doc being grabbed by other user, add this user to waiting list for receiving it.
 		if (this.awaitingDoc) {
-			this.waitingConnections.push(c);
+			this.waitingConnections.add(c);
 			console.log("connection waiting for doc.");
 			return;
 		}
@@ -257,17 +257,16 @@ class Document {
     }
 
     notifyOthers(connection, message, includeMessenger) {
-	    for (var i=0; i<this.connections.length; i++) {
-	      var conn = this.connections[i];
+		this.connections.forEach(function(conn) {
 	      if (conn == connection && !includeMessenger) {
-	        continue;
+	        return;
 	      }
 	      if (message.type === 'utf8') {
 	        conn.sendUTF(message.utf8Data);
 	      } else if (message.type === 'binary') {
 	        conn.sendBytes(message.binaryData);
 	      }
-	    }
+		});
     }
 }
 
