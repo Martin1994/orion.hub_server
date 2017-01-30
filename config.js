@@ -14,5 +14,6 @@ module.exports = {
 	'jwt_secret': "pomato (potato and tomato mix lol)",
 	'orion': "http://localhost:8081/",
 	'fileLoadUrl': "sharedWorkspace/tree/load/",
-	'fileSaveUrl': "sharedWorkspace/tree/save/"
+	'fileSaveUrl': "sharedWorkspace/tree/save/",
+	'saveFrequecy': 10
 }

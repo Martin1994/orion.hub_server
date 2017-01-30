@@ -9,16 +9,17 @@
  * Contributors: IBM Corporation - initial API and implementation
  ******************************************************************************/
 
-"use strict";
+'use strict';
+
 
 var ot = require('ot');
 var parseUrl = require('url').parse;
-var Promise = require('bluebird');
 var Request = require('request');
 var config = require('./config.js');
 
-var fileLoadUrl = config.orion + config.fileLoadUrl;
-var fileSaveUrl = config.orion + config.fileSaveUrl;
+var FILE_LOAD_URL = config.orion + config.fileLoadUrl;
+var FILE_SAVE_URL = config.orion + config.fileSaveUrl;
+var SAVE_FREQUENCY = config.saveFrequency;
 
 /**
 * This class defines an active document.
@@ -26,258 +27,309 @@ var fileSaveUrl = config.orion + config.fileSaveUrl;
 */
 class Document {
 
-	/**
-	 * @param id - the doc id.
-	 * @param sessionId - the id of the session
-	**/
+    /**
+     * @param id - the doc id.
+     * @param sessionId - the id of the session
+     */
     constructor(id, sessionId) {
-    	//every client is identified by clientID; must have as property a connection ID, and in-doc line location
-    	this.clients = {};
-    	this.ot = null;
-		this.connections = new Set();
-    	this.id = id;
-		this.sessionId = sessionId;
-		this.awaitingDoc = false;
-		this.waitingConnections = [];
+        /** @type {Map.<WebSocket, Client>} */
+        this.clients = new Map();
+        /** @type {ot.Server} */
+        this.ot = null;
+        this.id = id;
+        this.sessionId = sessionId;
+        this.awaitingDoc = false;
+        this.waitingConnections = [];
     }
 
+    /**
+     * Start OT server
+     * 
+     * @return {Promise}
+     */
     startOT() {
-		if (this.awaitingDoc) {
-			return new Promise.resolve();
-		}
-		this.awaitingDoc = true;
-    	var self = this;
-    	return this.getDocument()
-    	.then(function(text, error) {
-    		if (error) {
-    			console.log('Failed to get initial content.');
-    		}
-	    	self.ot = new ot.Server(text);
-			console.log("******************");
-			console.log(self.id);
-			console.log("OT HAS STARTED!!");
-			self.awaitingDoc = false;
-			self.waitingConnections.forEach(function(c) {
-				self.sendInit(c);
-			});
-			self.waitingConnections = [];
-    	});
-    }
-
-    destroy() {
-    }
-
-    joinDocument(connection, clientId, client) {
-		if (!this.clients[clientId] && client) {
-			this.clients[clientId] = client;
-			this.clients[clientId].selection = new ot.Selection.createCursor(0);
-		}
-
-    	this.connections.add(connection);
-
-		var message = {
-			'type': 'utf8',
-			'utf8Data': JSON.stringify({
-				'type': 'client_joined',
-				'clientId': clientId,
-				'client': this.clients[clientId],
-				'doc': this.id
-			})
-		};
-
-		this.notifyOthers(connection, message);
-
-		this.sendInit(connection);
-    }
-
-    leaveDocument(connection, clientId, callback) {
-	    var has = this.connections.has(connection);
-
-	    if (!has) {
-	    	return;
-	    }
-
-	    this.connections.delete(connection);
-    	//delete the client
-    	if (clientId) {
-    		delete this.clients[clientId];
-    	} else {
-    		var toDelete = undefined;
-    		for (var client in this.clients) {
-    			if (client.connectionID == connection.ID) {
-    				toDelete = client;
-    				break;
-    			}
-    		}
-    		delete this.clients[toDelete];
-    	}
-
-		var message = {
-			'type': 'utf8',
-			'utf8Data': JSON.stringify({
-				'type': 'client_left',
-				'clientId': clientId,
-				'doc': this.id
-			})
-		};
-
-		if (Object.keys(this.clients).length == 0) {
-			this.saveDocument()
-			.then(function() {
-				callback(true);
-			});
-		} else {
-			this.notifyOthers(null, message);
-			callback(false);
-		}
-    }
-
-    onmessage(connection, message, client) {
-		var msg = JSON.parse(message.utf8Data);
-
-	    if (msg.type == 'join-document') {
-			this.joinDocument(connection, msg.clientId, client);
-	    } else if (msg.type == 'operation') {
-			try {
-				var operation = this.newOperation(msg.operation, msg.revision);
-		        msg.operation = operation;
-		        message.utf8Data = JSON.stringify(msg);
-		        connection.sendUTF(JSON.stringify({'type': 'ack', 'doc': this.id}));
-		        this.notifyOthers(connection, message);
-			} catch (e) {
-				console.warn(e);
-				var self = this;
-				this.connections.forEach(function(c) {
-					self.sendInit(c);
-				});
-			}
-	    } else if (msg.type == 'selection') {
-			if (this.clients[msg.clientId]) {
-				this.clients[msg.clientId].selection = msg.selection;
-			}
-	    	this.notifyOthers(connection, message);
-	    } else if (msg.type == 'get-clients') {
-	    	this.sendAllClients(connection);
-	    }
-    }
-
-    updateClient(msg) {
-    	var changed = false;
-    	if (this.clients[msg.clientId]) {
-    		var client = this.clients[msg.clientId];
-    		if (msg.color && msg.color != client.color) {client.color = msg.color; changed = true;}
-    		if (msg.name && msg.name != client.name) {client.name = msg.name; changed = true;}
-    	} else {
-
-    	}
-
-    	msg.type = 'update_client';
-
-		var message = {
-			'type': 'utf8',
-			'utf8Data': JSON.stringify(msg)
-		};
-
-    	if (changed) this.notifyOthers(null, message);
-    }
-
-	sendInit(c) {
-		//if doc being grabbed by other user, add this user to waiting list for receiving it.
-		if (this.awaitingDoc) {
-			this.waitingConnections.add(c);
-			console.log("connection waiting for doc.");
-			return;
-		}
-		try {
-			var message = JSON.stringify({
-				type: "init-document",
-				operation: new ot.TextOperation().insert(this.ot.document),
-				revision: this.ot.operations.length,
-				'doc': this.id,
-				clients: this.clients
-			}); 
-			c.sendUTF(message);
-		} catch (e) {
-			console.warn(e.stack);
-			if (!this.ot) {
-				var self = this;
-				console.log("******************");
-				console.log(this.id);
-				console.log("two users probably entered a doc at the same moment.");
-				this.startOT()
-				.then(function() {
-					self.sendInit(c);
-				});
-			}
-		}
-	}
-
-    getDocument() {
-    	var self = this;
-    	return new Promise(function(resolve, reject) {
-			Request(fileLoadUrl + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
-				if (!error) {
-					resolve(body);
-				} else {
-					reject(error);
-				}
-			});
-		});
-    }
-
-    saveDocument() {
-    	var self = this;
-    	return new Promise(function(resolve, reject) {
-    		var headerData = {
-				"Orion-Version": "1",
-				"Content-Type": "text/plain; charset=UTF-8"
-			};
-			Request({method: 'PUT', uri: fileSaveUrl + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
-				if (body && !error) {
-					resolve(body);
-				} else {
-					reject(error);
-				}
-			});
-		});
-    }
-
-    sendAllClients(connection) {
-		var message = JSON.stringify({
-			type: "all_clients",
-			'doc': this.id,
-			clients: this.clients
-		});
-		connection.sendUTF(message);
-    }
-
-    newOperation(operation, revision) {
-        if (revision % 5 == 0) {
-	        this.saveDocument()
-	        .then(function(success, error) {
-				if (error) {
-					console.log(error);
-				} else {
-					console.log("done saving");
-				}
-	        });
+        if (this.awaitingDoc) {
+            return new Promise.resolve();
         }
-	    var operation = ot.TextOperation.fromJSON(operation);
-	    operation = this.ot.receiveOperation(revision, operation);
-	    return operation;
+        this.awaitingDoc = true;
+        var self = this;
+        return this.getDocument()
+        .then(function(text, error) {
+            if (error) {
+                console.log('Failed to get initial content.');
+            }
+            self.ot = new ot.Server(text);
+            console.log('OT instance started for ' + self.id);
+            self.awaitingDoc = false;
+            self.waitingConnections.forEach(function(c) {
+                self.sendInit(c);
+            });
+            self.waitingConnections = [];
+        });
     }
 
-    notifyOthers(connection, message, includeMessenger) {
-		this.connections.forEach(function(conn) {
-	      if (conn == connection && !includeMessenger) {
-	        return;
-	      }
-	      if (message.type === 'utf8') {
-	        conn.sendUTF(message.utf8Data);
-	      } else if (message.type === 'binary') {
-	        conn.sendBytes(message.binaryData);
-	      }
-		});
+    /**
+     * Cleanup
+     */
+    destroy() {
+        console.log('OT instance ended for ' + this.id);
+    }
+
+    /**
+     * Add a client to this document
+     * 
+     * @param {WebSocket} connection
+     * @param {string} clientId
+     * @param {Client} client
+     */
+    joinDocument(connection, clientId, client) {
+        if (!this.clients.has(connection) && client) {
+            this.clients.set(connection, client);
+            client.selection = new ot.Selection.createCursor(0);
+        }
+
+        var message = {
+            'type': 'utf8',
+            'utf8Data': JSON.stringify({
+                'type': 'client_joined',
+                'clientId': clientId,
+                'client': client,
+                'doc': this.id
+            })
+        };
+
+        this.notifyOthers(connection, message);
+
+        this.sendInit(connection);
+    }
+
+    /**
+     * Remove a client from the document
+     */
+    leaveDocument(connection, clientId, callback) {
+        var has = this.clients.has(connection);
+
+        if (!has) {
+            return;
+        }
+
+        //delete the client
+        this.clients.delete(connection);
+
+        var message = {
+            'type': 'utf8',
+            'utf8Data': JSON.stringify({
+                'type': 'client_left',
+                'clientId': clientId,
+                'doc': this.id
+            })
+        };
+
+        if (this.clients.size == 0) {
+            this.saveDocument()
+            .then(function() {
+                callback(true);
+            });
+        } else {
+            this.notifyOthers(null, message);
+            callback(false);
+        }
+    }
+
+    /**
+     * Handle incoming message
+     * 
+     * @param {WebSocket} connection
+     * @param {Object} msg
+     * @param {Client} client
+     */
+    onmessage(connection, msg, client) {
+        if (msg.type == 'join-document') {
+            this.joinDocument(connection, msg.clientId, client);
+        } else if (msg.type == 'operation') {
+            try {
+                var operation = this.newOperation(msg.operation, msg.revision);
+                var outMsg = {
+                    type: 'operation',
+                    doc: this.id,
+                    clientId: client.clientId,
+                    operation: operation
+                };
+                connection.send(JSON.stringify({
+                    'type': 'ack',
+                    'doc': this.id
+                }));
+                this.notifyOthers(connection, outMsg);
+            } catch (ex) {
+                console.warn(ex);
+                var self = this;
+                this.clients.forEach(function(client, c) {
+                    self.sendInit(c);
+                });
+            }
+        } else if (msg.type == 'selection') {
+            var client = this.clients.get(connection);
+            if (client) {
+                client.selection = msg.selection;
+            }
+            this.notifyOthers(connection, msg);
+        } else if (msg.type == 'get-selection') {
+            this.sendAllSelections(connection);
+        }
+    }
+
+    /**
+     * Update client's info
+     * 
+     * @param {WebSocket} connection
+     * @param {Object} msg
+     */
+    updateClient(connection, msg) {
+        var changed = false;
+        if (this.clients[msg.clientId]) {
+            var client = this.clients[msg.clientId];
+            if (msg.color && msg.color != client.color) {client.color = msg.color; changed = true;}
+            if (msg.name && msg.name != client.name) {client.name = msg.name; changed = true;}
+        } else {
+
+        }
+
+        if (changed) this.notifyOthers(null, msg);
+    }
+
+    /**
+     * Initialize client's document
+     * 
+     * @param {WebSocket} c
+     */
+    sendInit(c) {
+        //if doc being grabbed by other user, add this user to waiting list for receiving it.
+        if (this.awaitingDoc) {
+            this.waitingConnections.add(c);
+            return;
+        }
+        try {
+            var message = JSON.stringify({
+                type: 'init-document',
+                operation: new ot.TextOperation().insert(this.ot.document),
+                revision: this.ot.operations.length,
+                'doc': this.id,
+                clients: this.clients
+            }); 
+            c.send(message);
+        } catch (ex) {
+            console.error(ex.stack);
+            if (!this.ot) {
+                var self = this;
+                console.log(this.id);
+                console.error(this.id + ': two users probably entered a doc at the same moment.');
+                this.startOT()
+                .then(function() {
+                    self.sendInit(c);
+                });
+            }
+        }
+    }
+
+    /**
+     * Get document content
+     * 
+     * @return {Promise}
+     */
+    getDocument() {
+        var self = this;
+        return new Promise(function(resolve, reject) {
+            Request(FILE_LOAD_URL + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
+                if (!error) {
+                    resolve(body);
+                } else {
+                    reject(error);
+                }
+            });
+        });
+    }
+
+    /**
+     * Save this document
+     * 
+     * @return {Promise}
+     */
+    saveDocument() {
+        var self = this;
+        return new Promise(function(resolve, reject) {
+            var headerData = {
+                "Orion-Version": "1",
+                "Content-Type": "text/plain; charset=UTF-8"
+            };
+            Request({method: 'PUT', uri: FILE_SAVE_URL + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
+                if (body && !error) {
+                    resolve(body);
+                } else {
+                    reject(error);
+                }
+            });
+        });
+    }
+
+    /**
+     * Send every client's selection
+     * 
+     * @param {WebSocket} connection
+     */
+    sendAllSelections(connection) {
+        this.clients.forEach(function(client, clientConnection) {
+            if (connection !== clientConnection) {
+                connection.send(JSON.stringify({
+                    clientId: client.clientId,
+                    selection: client.selection
+                }));
+            }
+        });
+    }
+
+    /**
+     * Generate a transformed operation
+     * This method takes a raw operation from a client, apply the operation to
+     * the server and get the transformed operation.
+     * 
+     * @param {string} operation - opeartion JSON string
+     * @param {number} revision
+     * 
+     * @return {ot.Operation} - transformed operation
+     */
+    newOperation(operation, revision) {
+        var self = this;
+        if (revision % SAVE_FREQUENCY == 0) {
+            this.saveDocument()
+            .then(function(success, error) {
+                if (error) {
+                    console.error(error);
+                } else {
+                    console.log(self.id + ' is saved.');
+                }
+            });
+        }
+        var operation = ot.TextOperation.fromJSON(operation);
+        operation = this.ot.receiveOperation(revision, operation);
+        return operation;
+    }
+
+    /**
+     * Broadcast message
+     * 
+     * @param {WebSocket} connection
+     * @param {Object} message
+     * @param {boolean} [includeSender=false]
+     */
+    notifyOthers(connection, message, includeSender) {
+        includeSender = !!includeSender;
+        var msgStr = JSON.stringify(message);
+        this.clients.forEach(function(client, conn) {
+            if (conn === connection && !includeSender) {
+                return;
+            }
+            conn.send(msgStr);
+        });
     }
 }
 

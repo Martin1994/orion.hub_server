@@ -9,11 +9,27 @@
  * Contributors: IBM Corporation - initial API and implementation
  ******************************************************************************/
 
-"use strict";
+'use strict';
 
 var ot = require('ot');
 var parseUrl = require('url').parse;
 var Document = require('./document.js');
+
+/**
+ * This class record some connection status
+ */
+class ConnectionStatus {
+    constructor() {
+        this.created = Date.now();
+        this.sample = [];
+        this.domains = {};
+        this.urls = {};
+        this.firstDomain = null;
+        this.totalMessageChars = 0;
+        this.totalMessages = 0;
+        this.connections = 0;
+    }
+};
 
 /**
 * This class defines an active session.
@@ -22,161 +38,182 @@ var Document = require('./document.js');
 class Session {
 
     constructor(sessionId) {
-    	this.allConnections = [];
-    	this.clients = {};
-		//static class makeStats(...)?
-		this.connectionStats = {
-			created: Date.now(),
-			sample: [],
-			domains: {},
-			urls: {},
-			firstDomain: null,
-			totalMessageChars: 0,
-			totalMessages: 0,
-			connections: 0
-		};
-		this.docs = {};
-		this.sessionId = sessionId;
+        /** @type {Map.<WebSocket, Client>} */
+        this.clients = new Map();
+        this.connectionStats = new ConnectionStatus();
+        /** @type {Object.<string, Document>} */
+        this.docs = {};
+        this.sessionId = sessionId;
     }
 
-    connectionJoined(c) {
-    	this.allConnections.push(c);
-    	this.connectionStats.connections++;
-    	c.sendUTF(JSON.stringify({
-			type: "init-connection",
-			peerCount: this.allConnections.length-1
-		}));
+    /**
+     * Add a connection
+     * 
+     * @param {WebSocket} c
+     * @param {Client} client
+     */
+    connectionJoined(c, client) {
+        this.clients.set(c, client);
+        this.connectionStats.connections++;
+        this.notifyAll(c, {
+            type: 'client-joined',
+            clientId: client.clientId,
+            name: client.name,
+            color: client.color
+        });
     }
 
+    /**
+     * Remove a connection
+     * 
+     * @param {WebSocket} c
+     * @param {function} callback - calls when it's done, with a boolean
+     *     parameter indicates whether there is no conenctions left.
+     */
     connectionLeft(c, callback) {
-	    var index = this.allConnections.indexOf(c);
-	    if (index != -1) {
-	      this.allConnections.splice(index, 1);
-	    }
-    	//delete the client
-		var toDelete = undefined;
-		for (var client in this.clients) {
-			if (this.clients[client].connectionID == c.ID) {
-				toDelete = this.clients[client].clientId;
-				break;
-			}
-		}
+        var self = this;
+        var client = this.clients.get(c);
+        if (client) {
+            this.clients.delete(c);
 
-		if (typeof toDelete !== 'undefined') {
-			//remove the user from the document
-			var tempClient = this.clients[toDelete];
-			delete this.clients[toDelete];
+            this.notifyAll(c, {
+                type: 'client-left',
+                clientId: client.clientId
+            });
 
-			if (tempClient.currentDoc && this.docs[tempClient.currentDoc]) {
-				var self = this;
-				//check with the document if this is the last user. If so, clear the doc from memory.
-				this.docs[tempClient.currentDoc].leaveDocument(c, tempClient.clientId, function(lastPerson) {
-					lastPerson ? delete self.docs[tempClient.currentDoc] : null;
-
-					!self.allConnections.length ? callback(true) : callback(false);
-				});
-			} else {
-				!this.allConnections.length ? callback(true) : callback(false);
-			}
-		}
+            // remove the user from the document
+            var doc = client.location;
+            if (doc && this.docs[doc]) {
+                // check with the document if this is the last user. If so, clear the doc from memory.
+                this.docs[doc].leaveDocument(c, client.clientId, function(lastPerson) {
+                    if (lastPerson) {
+                        self.docs[doc].destroy();
+                        delete self.docs[doc];
+                    }
+                    callback(!self.clients.size);
+                });
+            } else {
+                callback(!self.clients.size);
+            }
+        }
     }
 
-    onmessage(c, message) {
-    	this.miscInfo(message);
-      	
-		var msg = JSON.parse(message.utf8Data);
-		
-		if (!this.clients[msg.clientId]) {
-			//populate the client data or update it if it already exists
-			this.clients[msg.clientId] = this.createClient(c.id, msg.clientId, 'unknown');
-    	}
+    /**
+     * Handles incoming message
+     * 
+     * @param {WebSocket} c
+     * @param {Object} msg
+     */
+    onmessage(c, msg) {
+        var client = this.clients.get(c);
 
-    	//if its a doc specific message, only send it to the clients involved. Otherwise send to all.
-    	if (msg.doc) {
-		    var doc = msg.doc;
-	    	this.clients[msg.clientId].currentDoc = doc;
-		    //if we don't have the document, let's start it up.
-	    	if (!this.docs[doc]) {
-	    		var self = this;
-				this.docs[doc] = new Document(doc, this.sessionId);
-				this.docs[doc].startOT()
-				.then(function() {
-					self.docs[doc].onmessage(c, message, self.clients[msg.clientId]);
-				});
-			} else {
-				this.docs[doc].onmessage(c, message, this.clients[msg.clientId]);
-			}
-    	} else {
-    		if (msg.type == 'leave-document') {
-    			if (this.docs[this.clients[msg.clientId].currentDoc]) {
-					var self = this;
-					this.docs[this.clients[msg.clientId].currentDoc].leaveDocument(c, msg.clientId, function(lastPerson) {
-						if (lastPerson) {
-							delete self.docs[self.clients[msg.clientId].currentDoc];
-						}
-					});
-				}
-    		} else {
-				if (this.clients[msg.clientId].currentDoc && this.docs[this.clients[msg.clientId].currentDoc]) {
-	    			//update doc specific client data
-	    			this.docs[this.clients[msg.clientId].currentDoc].updateClient(msg);
-	    		}
-					console.log("out: " + message.utf8Data);
-	    	 	this.notifyAll(c, message);
-    		}
-    	}
-    }
-    
-    notifyAll(c, message, includeMessenger) {
-	    for (var i=0; i<this.allConnections.length; i++) {
-	      var conn = this.allConnections[i];
-	      if (conn == c && !includeMessenger) {
-	        continue;
-	      }
-	      if (message.type === 'utf8') {
-	        conn.sendUTF(message.utf8Data);
-	      } else if (message.type === 'binary') {
-	        conn.sendBytes(message.binaryData);
-	      }
-	    }
+        // if its a doc specific message, only send it to the clients involved. Otherwise send to all.
+        if (msg.doc) {
+            if (msg.type === 'join-document') {
+                this.joinDocument(c, msg, client, msg.doc);
+            } else {
+                var doc = this.docs[msg.doc];
+                if (doc) {
+                    doc.onmessage(c, msg, client);
+                } else {
+                    c.send(JSON.stringify({
+                        type: 'error',
+                        error: 'Invalid document ' + msg.doc
+                    }));
+                }
+            }
+        } else {
+            if (msg.type === 'leave-document') {
+                if (client.location && this.docs[client.location]) {
+                    this.leaveDocument(c, msg, client);
+                }
+            } else if (msg.type === 'update-client') {
+                if (msg.name) {
+                    client.name = msg.name;
+                }
+                if (msg.color) {
+                    client.color = msg.color;
+                }
+                if (msg.location) {
+                    client.location = msg.location;
+                }
+                var outMsg = client.serialize();
+                outMsg.type = 'client-updated';
+                this.notifyAll(c, outMsg);
+            } else if (msg.type === 'get-clients') {
+                this.clients.forEach(function(peerClient) {
+                    var outMsg = peerClient.serialize();
+                    outMsg.type = 'client-joined';
+                    c.send(JSON.stringify(outMsg));
+                });
+            } else {
+                c.send(JSON.stringify({
+                    type: 'error',
+                    error: 'Unknown message type: ' + msg.type
+                }));
+            }
+        }
     }
 
-    createClient(connectionID, clientId, username) {
-    	if (!this.clients[clientId]) {
-    		var usercolor = this.generateUserColor();
-
-    		this.clients[clientId] = {
-				'clientId': clientId,
-				'username': username,
-				'color': usercolor,
-				'connectionID': connectionID,
-				'active': true
-    		};
-    	}
+    /**
+     * Join a document
+     * 
+     * @param {WebSocket} c
+     * @param {Object} msg
+     * @param {Client} client
+     * @param {string} doc
+     */
+    joinDocument(c, msg, client, doc) {
+        if (client.location && this.docs[client.location]) {
+            this.leaveDocument(c, msg, client);
+        }
+        // if we don't have the document, let's start it up.
+        if (!this.docs[doc]) {
+            var self = this;
+            this.docs[doc] = new Document(doc, this.sessionId);
+            this.docs[doc].startOT()
+            .then(function() {
+                self.docs[doc].onmessage(c, msg, client);
+            });
+        } else {
+            this.docs[doc].onmessage(c, msg, client);
+        }
     }
 
-    miscInfo(message) {
-	    var domain = null;
-       	var msg = JSON.parse(message.utf8Data);
-
-		if (msg.url) {
-		  domain = parseUrl(msg.url).hostname;
-		  this.connectionStats.urls[msg.url] = true;
-		}
-		if ((! this.connectionStats.firstDomain) && domain) {
-		  this.connectionStats.firstDomain = domain;
-		}
-		this.connectionStats.domains[domain] = true;
-		this.connectionStats.totalMessageChars += message.utf8Data.length;
-		this.connectionStats.totalMessages++;
+    /**
+     * Leave the client's document
+     * 
+     * @param {WebSocket} c
+     * @param {Object} msg
+     * @param {Client} client
+     */
+    leaveDocument(c, msg, client) {
+        var self = this;
+        var doc = client.location;
+        this.docs[doc].leaveDocument(c, msg.clientId, function(lastPerson) {
+            if (lastPerson) {
+                self.docs[doc].destroy();
+                delete self.docs[doc];
+            }
+        });
     }
 
-    generateUserColor() {
-		var COLORS = [
-			"#8A2BE2", "#DC143C", "#E67E00", "#FF00FF", "#00CC00", "#999966", "#669999",
-			"#FF6347", "#006AFF", "#000000"
-		];
-		return COLORS[Math.floor(Math.random() * COLORS.length)];
+    /**
+     * Send message to all clients
+     * 
+     * @param {WebSocket} c
+     * @param {Object} msg
+     * @param {boolean} [includeSender=false]
+     */
+    notifyAll(c, msg, includeSender) {
+        includeSender = !!includeSender;
+        var msgStr = JSON.stringify(msg);
+        this.clients.forEach(function(client, conn) {
+            if (conn === c && !includeSender) {
+                return;
+            }
+            conn.send(msgStr);
+        });
     }
 }
 
