@@ -106,6 +106,7 @@ class Session {
      */
     onmessage(c, msg) {
         var client = this.clients.get(c);
+        var self = this;
 
         // if its a doc specific message, only send it to the clients involved. Otherwise send to all.
         if (msg.doc) {
@@ -146,6 +147,66 @@ class Session {
                     outMsg.type = 'client-joined';
                     c.send(JSON.stringify(outMsg));
                 });
+            } else if (msg.type === 'file-operation') {
+                var outMsg = {
+                    type: 'file-operation',
+                    clientId: client.clientId
+                }
+                // Check type
+                msg.data = Array.isArray(msg.data) ? msg.data.slice() : [];
+                outMsg.data = msg.data;
+                // Need to be careful to deal with renaming and deleting
+                // because the hub server might save a file after it is deleted
+                try {
+                    if (msg.operation === 'created') {
+                        outMsg.operation = 'created';
+                        this.notifyAll(c, outMsg);
+                    } else if (msg.operation === 'moved') {
+                        outMsg.operation = 'moved';
+                        var promises = [];
+                        msg.data.forEach(function(file) {
+                            promises.push(new Promise(function(resolve, reject) {
+                                var from = self.convertWorkspacePathToProject(file.source);
+                                var to = self.convertWorkspacePathToProject(file.result.Location);
+                                if (self.docs[from] && !self.docs[from].discard) {
+                                    self.docs[from].saveDocument(to).then(function() {
+                                        self.docs[from].discard = true;
+                                        self.docs[from].destroy();
+                                        delete self.docs[from];
+                                        resolve();
+                                    }).catch(function() {
+                                        resolve();
+                                    });
+                                }
+                            }));
+                        });
+                        Promise.all(promises).then(function() {
+                            self.notifyAll(c, outMsg);
+                        });
+                    } else if (msg.operation === 'deleted') {
+                        outMsg.operation = 'deleted';
+                        msg.data.forEach(function(file) {
+                            var from = self.convertWorkspacePathToProject(file.deleteLocation);
+                            if (self.docs[from] && !self.docs[from].discard) {
+                                self.docs[from].discard = true;
+                                self.docs[from].destroy();
+                                delete self.docs[from];
+                            }
+                        });
+                        this.notifyAll(c, outMsg);
+                    } else {
+                        c.send(JSON.stringify({
+                            type: 'error',
+                            error: 'Invalid file operation: ' + msg.operation
+                        }));
+                    }
+                } catch (ex) {
+                    c.send(JSON.stringify({
+                        type: 'error',
+                        error: 'Invalid operation.'
+                    }));
+                    console.error(ex);
+                }
             } else {
                 c.send(JSON.stringify({
                     type: 'error',
@@ -214,6 +275,24 @@ class Session {
             }
             conn.send(msgStr);
         });
+    }
+
+    /**
+     * Convert a path from workspace to project relative path
+     * 
+     * @example
+     *     convertWorkspacePathToProject('/file/myProj/myFile.txt') === 'myProj/myFile.txt';
+     * 
+     * @param {string} path
+     * 
+     * @return {string}
+     */
+    convertWorkspacePathToProject(path) {
+        if (path.indexOf('/file/') === 0) {
+            return path.substr(6);
+        } else {
+            return path.split('/').slice(7).join('/');
+        }
     }
 }
 

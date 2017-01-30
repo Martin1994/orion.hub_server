@@ -40,6 +40,7 @@ class Document {
         this.sessionId = sessionId;
         this.awaitingDoc = false;
         this.waitingConnections = [];
+        this.discard = false;
     }
 
     /**
@@ -89,13 +90,10 @@ class Document {
         }
 
         var message = {
-            'type': 'utf8',
-            'utf8Data': JSON.stringify({
-                'type': 'client_joined',
-                'clientId': clientId,
-                'client': client,
-                'doc': this.id
-            })
+            'type': 'client-joined-doc',
+            'clientId': clientId,
+            'client': client,
+            'doc': this.id
         };
 
         this.notifyOthers(connection, message);
@@ -117,12 +115,9 @@ class Document {
         this.clients.delete(connection);
 
         var message = {
-            'type': 'utf8',
-            'utf8Data': JSON.stringify({
-                'type': 'client_left',
-                'clientId': clientId,
-                'doc': this.id
-            })
+            'type': 'client-left-doc',
+            'clientId': clientId,
+            'doc': this.id
         };
 
         if (this.clients.size == 0) {
@@ -203,32 +198,30 @@ class Document {
      * @param {WebSocket} c
      */
     sendInit(c) {
-        //if doc being grabbed by other user, add this user to waiting list for receiving it.
+        var self = this;
+        // if doc being grabbed by other user, add this user to waiting list for receiving it.
         if (this.awaitingDoc) {
             this.waitingConnections.add(c);
             return;
         }
-        try {
-            var message = JSON.stringify({
-                type: 'init-document',
-                operation: new ot.TextOperation().insert(this.ot.document),
-                revision: this.ot.operations.length,
-                'doc': this.id,
-                clients: this.clients
-            }); 
-            c.send(message);
-        } catch (ex) {
-            console.error(ex.stack);
-            if (!this.ot) {
-                var self = this;
-                console.log(this.id);
-                console.error(this.id + ': two users probably entered a doc at the same moment.');
-                this.startOT()
-                .then(function() {
-                    self.sendInit(c);
-                });
-            }
-        }
+
+        var message = JSON.stringify({
+            type: 'init-document',
+            operation: new ot.TextOperation().insert(this.ot.document),
+            revision: this.ot.operations.length,
+            doc: this.id
+        }); 
+        c.send(message);
+
+        // Also send all peer selections
+        this.clients.forEach(function(client) {
+            c.send(JSON.stringify({
+                type: 'selection',
+                doc: self.id,
+                clientId: client.clientId,
+                selection: client.selection
+            }));
+        });
     }
 
     /**
@@ -252,20 +245,29 @@ class Document {
     /**
      * Save this document
      * 
+     * @param {string} [path] - Path to save. Default to this file. This
+     *     parameter is useful when renaming a file.
+     * 
      * @return {Promise}
      */
-    saveDocument() {
+    saveDocument(path) {
+        path = path || this.id;
         var self = this;
         return new Promise(function(resolve, reject) {
+            if (self.discard) {
+                resolve();
+            }
             var headerData = {
                 "Orion-Version": "1",
                 "Content-Type": "text/plain; charset=UTF-8"
             };
-            Request({method: 'PUT', uri: FILE_SAVE_URL + self.id + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
+            Request({method: 'PUT', uri: FILE_SAVE_URL + path + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
                 if (body && !error) {
-                    resolve(body);
+                    resolve();
                 } else {
-                    reject(error);
+                    //reject();
+                    console.error('Failed to save file ' + path);
+                    resolve();
                 }
             });
         });
