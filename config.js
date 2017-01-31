@@ -10,10 +10,28 @@
  ******************************************************************************/
 
 module.exports = {
-	//jwt_secret needs to be the same as the one in the server connected to the filesystem (orion)
+	/**
+	 * jwt_secret needs to be the same as the one in the server connected to the filesystem (orion)
+	 */
 	'jwt_secret': "pomato (potato and tomato mix lol)",
+	/**
+	 * Orion url
+	 */
 	'orion': "http://localhost:8081/",
+	/**
+	 * Load url. Make sure end with /
+	 */
 	'fileLoadUrl': "sharedWorkspace/tree/load/",
+	/**
+	 * Save url. Make sure end with /
+	 */
 	'fileSaveUrl': "sharedWorkspace/tree/save/",
-	'saveFrequecy': 10
+	/**
+	 * Check session url. Make sure end with /
+	 */
+	'checkSessionUrl': "sharedWorkspace/tree/session/",
+	/**
+	 * Specify how many OT operations per save
+	 */
+	'saveFrequency': 10
 }

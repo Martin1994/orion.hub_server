@@ -11,9 +11,9 @@
 
 'use strict';
 
+var Document = require('./document.js');
 var ot = require('ot');
 var parseUrl = require('url').parse;
-var Document = require('./document.js');
 
 /**
  * This class record some connection status

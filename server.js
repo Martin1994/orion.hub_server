@@ -11,13 +11,13 @@
 
 'use strict';
 
-var http = require('http');
-var express = require('express');
-var ws = require('ws');
-var url = require('url');
 var config = require('./config');
-var SessionManager = require('./session_manager');
+var express = require('express');
+var http = require('http');
 var jwt = require('jsonwebtoken');
+var SessionManager = require('./session_manager');
+var url = require('url');
+var ws = require('ws');
 
 var JWT_SECRET = config.jwt_secret;
 
@@ -52,7 +52,9 @@ wss.on('connection', function(ws) {
             // Give the control to a session
             sessions.addConnection(sessionId, ws, msgObj.clientId, user.username).then(function() {
                 ws.removeListener('message', initMsgHandler);
-                ws.send(JSON.stringify({'type': 'authenticated'}));
+                ws.send(JSON.stringify({ type: 'authenticated' }));
+            }).catch(function(err) {
+                ws.send(JSON.stringify({ type: 'error', error: err }));
             });
         } catch (ex) {
             ws.send(JSON.stringify({

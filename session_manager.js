@@ -12,11 +12,12 @@
 'use strict';
 
 var Client = require('./client');
-var Session = require('./session');
-var Request = require('request');
 var config = require('./config');
+var jwt = require('jsonwebtoken');
+var Request = require('request');
+var Session = require('./session');
 
-var fileSaveUrl = config.orion + config.fileSaveUrl;
+var CHECK_SESSION_URL = config.orion + config.checkSessionUrl;
 
 /**
  * Manage sessions and their entering and leaving connections
@@ -61,8 +62,13 @@ class SessionManager {
                     self._sessionWaitingClients[sessionId] = [];
                     self._sessionWaitingClients[sessionId].push({ resolve: resolve, reject, reject });
                     // Check existence
-                    Request(fileSaveUrl + '?hubID=' + sessionId, function(err, response, body) {
-                        if (err || response.statusCode === 401) {
+                    Request({
+                        uri: CHECK_SESSION_URL + sessionId,
+                        headers: {
+                            Authorization: 'Bearer ' + jwt.sign({}, config.jwt_secret)
+                        }
+                    }, function(err, response, body) {
+                        if (err || response.statusCode === 404) {
                             self._sessionWaitingClients[sessionId].forEach(function(deferred) {
                                 deferred.reject('Invalid session ID.');
                             });

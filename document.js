@@ -11,15 +11,16 @@
 
 'use strict';
 
-
+var config = require('./config.js');
+var jwt = require('jsonwebtoken');
 var ot = require('ot');
 var parseUrl = require('url').parse;
 var Request = require('request');
-var config = require('./config.js');
 
 var FILE_LOAD_URL = config.orion + config.fileLoadUrl;
 var FILE_SAVE_URL = config.orion + config.fileSaveUrl;
 var SAVE_FREQUENCY = config.saveFrequency;
+var SERVER_TOKEN = jwt.sign({}, config.jwt_secret);
 
 /**
 * This class defines an active document.
@@ -232,7 +233,12 @@ class Document {
     getDocument() {
         var self = this;
         return new Promise(function(resolve, reject) {
-            Request(FILE_LOAD_URL + self.id + '?hubID=' + self.sessionId, function(error, response, body) {
+            Request({
+                uri: FILE_LOAD_URL + self.sessionId + '/' + self.id, 
+                headers: {
+                    Authorization: 'Bearer ' + SERVER_TOKEN
+                }
+            }, function(error, response, body) {
                 if (!error) {
                     resolve(body);
                 } else {
@@ -259,9 +265,15 @@ class Document {
             }
             var headerData = {
                 "Orion-Version": "1",
-                "Content-Type": "text/plain; charset=UTF-8"
+                "Content-Type": "text/plain; charset=UTF-8",
+                "Authorization": 'Bearer ' + SERVER_TOKEN
             };
-            Request({method: 'PUT', uri: FILE_SAVE_URL + path + '?hubID=' + self.sessionId, headers: headerData, body: self.ot.document}, function(error, response, body) {
+            Request({
+                method: 'PUT',
+                uri: FILE_SAVE_URL + self.sessionId + '/' + path,
+                headers: headerData,
+                body: self.ot.document
+            }, function(error, response, body) {
                 if (body && !error) {
                     resolve();
                 } else {
