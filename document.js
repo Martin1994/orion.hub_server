@@ -40,7 +40,7 @@ class Document {
         this.id = id;
         this.sessionId = sessionId;
         this.awaitingDoc = false;
-        this.waitingConnections = [];
+        this.waitingConnections = new Set();
         this.discard = false;
     }
 
@@ -66,7 +66,7 @@ class Document {
             self.waitingConnections.forEach(function(c) {
                 self.sendInit(c);
             });
-            self.waitingConnections = [];
+            self.waitingConnections = new Set();
         });
     }
 
@@ -172,25 +172,6 @@ class Document {
         } else if (msg.type == 'get-selection') {
             this.sendAllSelections(connection);
         }
-    }
-
-    /**
-     * Update client's info
-     * 
-     * @param {WebSocket} connection
-     * @param {Object} msg
-     */
-    updateClient(connection, msg) {
-        var changed = false;
-        if (this.clients[msg.clientId]) {
-            var client = this.clients[msg.clientId];
-            if (msg.color && msg.color != client.color) {client.color = msg.color; changed = true;}
-            if (msg.name && msg.name != client.name) {client.name = msg.name; changed = true;}
-        } else {
-
-        }
-
-        if (changed) this.notifyOthers(null, msg);
     }
 
     /**
@@ -342,7 +323,11 @@ class Document {
             if (conn === connection && !includeSender) {
                 return;
             }
-            conn.send(msgStr);
+            try {
+                conn.send(msgStr);
+            } catch (ex) {
+                console.error(ex);
+            }
         });
     }
 }

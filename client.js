@@ -25,6 +25,9 @@ class Client {
         this.clientId = clientId;
         this.name = name;
         this.color = generateColorByName(name);
+        /** Location for internal track */
+        this.doc = '';
+        /** Location for display */
         this.location = '';
         /** @type ot.Selection */
         this.selection = null;

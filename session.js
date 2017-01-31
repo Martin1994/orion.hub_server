@@ -82,7 +82,7 @@ class Session {
             });
 
             // remove the user from the document
-            var doc = client.location;
+            var doc = client.doc;
             if (doc && this.docs[doc]) {
                 // check with the document if this is the last user. If so, clear the doc from memory.
                 this.docs[doc].leaveDocument(c, client.clientId, function(lastPerson) {
@@ -112,6 +112,7 @@ class Session {
         if (msg.doc) {
             if (msg.type === 'join-document') {
                 this.joinDocument(c, msg, client, msg.doc);
+                client.doc = msg.doc;
             } else {
                 var doc = this.docs[msg.doc];
                 if (doc) {
@@ -125,7 +126,7 @@ class Session {
             }
         } else {
             if (msg.type === 'leave-document') {
-                if (client.location && this.docs[client.location]) {
+                if (client.doc && this.docs[client.doc]) {
                     this.leaveDocument(c, msg, client);
                 }
             } else if (msg.type === 'update-client') {
@@ -225,7 +226,7 @@ class Session {
      * @param {string} doc
      */
     joinDocument(c, msg, client, doc) {
-        if (client.location && this.docs[client.location]) {
+        if (client.doc && this.docs[client.doc]) {
             this.leaveDocument(c, msg, client);
         }
         // if we don't have the document, let's start it up.
@@ -250,13 +251,14 @@ class Session {
      */
     leaveDocument(c, msg, client) {
         var self = this;
-        var doc = client.location;
+        var doc = client.doc;
         this.docs[doc].leaveDocument(c, msg.clientId, function(lastPerson) {
             if (lastPerson) {
                 self.docs[doc].destroy();
                 delete self.docs[doc];
             }
         });
+        client.doc = '';
     }
 
     /**
@@ -273,7 +275,11 @@ class Session {
             if (conn === c && !includeSender) {
                 return;
             }
-            conn.send(msgStr);
+            try {
+                conn.send(msgStr);
+            } catch (ex) {
+                console.error(ex);
+            }
         });
     }
 
