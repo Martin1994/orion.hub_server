@@ -79,7 +79,7 @@ class SessionManager {
                             self._sessions[sessionId] = session;
                             self.addConnectionToSession(session, ws, new Client(clientId, name));
                             self._sessionWaitingClients[sessionId].forEach(function(deferred) {
-                                deferred.resolve('Invalid session ID.');
+                                deferred.resolve();
                             });
                             delete self._sessionWaitingClients[sessionId];
                         }
