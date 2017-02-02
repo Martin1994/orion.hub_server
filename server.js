@@ -84,7 +84,7 @@ app.use(function(err, req, res, next) {
     res.end();
 });
 
-var host = process.env.HOST || '127.0.0.1';
+var host = process.env.HOST || '0.0.0.0';
 var port = process.env.PORT || 8082;
 
 server.listen(port, host, function () {
