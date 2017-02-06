@@ -42,6 +42,7 @@ class Document {
         this.awaitingDoc = false;
         this.waitingConnections = new Set();
         this.discard = false;
+        this.saveTimeout = 0;
     }
 
     /**
@@ -294,18 +295,21 @@ class Document {
      */
     newOperation(operation, revision) {
         var self = this;
-        if (revision % SAVE_FREQUENCY == 0) {
-            this.saveDocument()
-            .then(function(success, error) {
-                if (error) {
-                    console.error(error);
-                } else {
-                    console.log(self.id + ' is saved.');
-                }
-            });
-        }
         var operation = ot.TextOperation.fromJSON(operation);
         operation = this.ot.receiveOperation(revision, operation);
+        // Save
+        if (!this.saveTimeout) {
+            this.saveTimeout = setTimeout(function() {
+                self.saveTimeout = 0;
+                self.saveDocument().then(function(success, error) {
+                    if (error) {
+                        console.error(error);
+                    } else {
+                        console.log(self.id + ' is saved.');
+                    }
+                })
+            }, SAVE_FREQUENCY);
+        }
         return operation;
     }
 

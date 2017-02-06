@@ -31,7 +31,7 @@ module.exports = {
 	 */
 	'checkSessionUrl': "sharedWorkspace/tree/session/",
 	/**
-	 * Specify how many OT operations per save
+	 * Specify how long between every saving (in ms)
 	 */
-	'saveFrequency': 10
+	'saveFrequency': 5000
 }
