@@ -47,7 +47,7 @@ class Client {
 };
 
 var MASK = 360;
-var MAGIC = 161803398 / 2 % MASK;
+var PHI = 0.5 * (Math.sqrt(5) - 1) * 360;
 var SATURATION = 0.7;
 var LIGHTNESS = 0.5;
 
@@ -61,9 +61,9 @@ var LIGHTNESS = 0.5;
 function generateColorByName(str) {
     var hue = 0;
     for (var i = 0; i < str.length; i++) {
-        hue = (hue + str.charCodeAt(i)) % MASK;
+        hue = hue * 127 + str.charCodeAt(i) % 127;
     }
-    hue = (hue * MAGIC) % MASK;
+    hue = Math.floor(hue * PHI) % MASK;
     var rgb = hsl2rgb(hue, SATURATION, LIGHTNESS);
     return ('#' + rgb[0].toString(16) + rgb[1].toString(16) + rgb[2].toString(16)).toUpperCase();
 }
