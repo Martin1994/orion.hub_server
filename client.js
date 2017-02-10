@@ -46,7 +46,7 @@ class Client {
     }
 };
 
-var MASK = 0xFF + 1;
+var MASK = 360;
 var MAGIC = 161803398 / 2 % MASK;
 var SATURATION = 0.7;
 var LIGHTNESS = 0.5;
